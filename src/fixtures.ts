@@ -1,5 +1,7 @@
 // Sample overdue accounts for dry-run demos.
-// All numbers are fictional (NANP 555-01xx range) or documentation ranges.
+// Phone numbers are fictional: US/UK values use official reserved-for-fiction
+// ranges (NANP 555-0100..0199; Ofcom 020 7946 0xxx). Ghana has no reserved
+// range, so its number is an obvious placeholder and must never be dialed.
 // Deliberately includes accounts the gate will BLOCK, to show enforcement.
 
 import type { OverdueAccount } from "./types.js";
@@ -22,7 +24,7 @@ export const SAMPLE_ACCOUNTS: OverdueAccount[] = [
   {
     accountId: "ACC-1002",
     customerName: "Kwame Mensah",
-    phone: "+233302550117",
+    phone: "+233302000000", // fictional placeholder (Ghana has no reserved range)
     region: "GH",
     timezone: "Africa/Accra",
     amountDueCents: 180000,
@@ -50,7 +52,7 @@ export const SAMPLE_ACCOUNTS: OverdueAccount[] = [
     // BLOCKED: consent flag set but no timestamp to prove it.
     accountId: "ACC-1004",
     customerName: "Priya Nair",
-    phone: "+442071838750",
+    phone: "+442079460958", // Ofcom reserved-for-drama range (020 7946 0xxx)
     region: "GB",
     timezone: "Europe/London",
     amountDueCents: 42000,
