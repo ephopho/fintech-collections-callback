@@ -30,6 +30,12 @@ const RECIPIENT_RESULT_SCHEMA = {
   },
 } as const;
 
+// How long to wait for a single call to reach a terminal state before giving up.
+// The SDK's default is 10 min; we cap at 5 so one stalled call can't block the
+// batch for that long, while still leaving headroom for a real call to finish.
+// A placed-then-timed-out call is still billed, so don't set this too tight.
+const CALL_TIMEOUT_MS = 300_000;
+
 export function createCalleClient(apiKey: string, baseUrl?: string): CalleClient {
   return new CalleClient({ apiKey, baseUrl: baseUrl ?? "https://api.heycall-e.com" });
 }
@@ -77,7 +83,7 @@ export async function placeCall(client: CalleClient, account: OverdueAccount): P
       recipientResultSchema: RECIPIENT_RESULT_SCHEMA,
       metadata: { account_id: account.accountId, days_past_due: String(account.daysPastDue) },
     },
-    { idempotencyKey: idempotencyKey(account) },
+    { idempotencyKey: idempotencyKey(account), timeoutMs: CALL_TIMEOUT_MS },
   );
 
   return {
