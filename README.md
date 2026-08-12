@@ -76,6 +76,42 @@ Each eligible account triggers one real outbound call via
 `client.calls.createAndWait(...)`, guarded by a deterministic idempotency key
 (`collections_<accountId>_<dueDate>`) so a re-run never double-dials.
 
+> **Never `--live` against the sample fixtures.** Their numbers are
+> reserved-for-fiction (e.g. `+12025550143` passes the gate) and must not be
+> dialed. Use the smoke test below to place a real call to a number you control.
+
+### Live smoke test (one number you control)
+
+`--smoke` ignores the fixtures and builds a **single** recipient from `SMOKE_*`
+environment variables, then hard-caps the run at one call. It runs the same
+pre-dial gate as a full batch. Preview it in dry-run first (no call placed):
+
+```bash
+SMOKE_PHONE=+1XXXXXXXXXX SMOKE_CONSENT=true npm run dev -- --smoke
+```
+
+When the preview shows `would call …`, place the real call:
+
+```bash
+# CALLE_API_KEY must be set; consent is OFF unless you set SMOKE_CONSENT=true
+SMOKE_PHONE=+1XXXXXXXXXX SMOKE_CONSENT=true npm run dev -- --live --smoke
+```
+
+Recognized variables (only `SMOKE_PHONE` is required):
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `SMOKE_PHONE` | — | **Required.** E.164 number you control and consent to call. |
+| `SMOKE_CONSENT` | `false` | Must be `true` or the gate blocks with `no-consent`. |
+| `SMOKE_CONSENT_TIMESTAMP` | now | ISO datetime; auto-set when consent is `true`. |
+| `SMOKE_NAME` | `Test Customer` | Name the agent asks for. |
+| `SMOKE_TIMEZONE` | this machine's zone | IANA id; drives quiet-hours (08:00–21:00 local). |
+| `SMOKE_REGION` | `US` | ISO 3166-1 alpha-2. |
+| `SMOKE_AMOUNT_CENTS` / `SMOKE_CURRENCY` | `10000` / `USD` | Amount quoted on the call. |
+| `SMOKE_DUE_DATE` / `SMOKE_DAYS_PAST_DUE` | derived / `30` | Due date and days past due. |
+| `SMOKE_ACCOUNT_ID` | `SMOKE-1` | Part of the idempotency key — change it to force a fresh call. |
+| `SMOKE_LANGUAGE` | `en-US` | BCP-47 locale for the spoken call. |
+
 ## Side effects
 
 - **Live mode places real phone calls** that cost money (CALL-E bills per
@@ -110,9 +146,11 @@ fintech-collections-callback/
 │   ├── gate.ts       # consent + E.164 + IANA timezone + quiet-hours checks
 │   ├── calle.ts      # the only CALL-E SDK integration (task + structured result)
 │   ├── fixtures.ts   # sample accounts (fictional numbers; some intentionally blocked)
+│   ├── smoke.ts      # SMOKE_* env -> single recipient for a one-number live test
 │   ├── types.ts      # domain types
 │   ├── gate.test.ts  # gate unit tests (no network)
-│   └── calle.test.ts # result-mapping unit tests (no network)
+│   ├── calle.test.ts # result-mapping unit tests (no network)
+│   └── smoke.test.ts # SMOKE_* account-builder unit tests (no network)
 ├── .env.example
 ├── package.json
 └── tsconfig.json
@@ -124,11 +162,12 @@ fintech-collections-callback/
 | --- | --- |
 | `npm run dry-run` | Full gate, no calls (default) |
 | `npm run live` | Place real calls (needs `CALLE_API_KEY`) |
-| `npm run dev -- <args>` | Run directly with custom flags (`--live`, `--max-calls=N`) |
+| `npm run dev -- <args>` | Run directly with custom flags (`--live`, `--smoke`, `--max-calls=N`) |
+| `npm run dev -- --smoke` | One-number test from `SMOKE_*` env (add `--live` to dial) |
 | `npm run build` | Compile to `dist/` |
 | `npm start` | Run the compiled build |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm test` | Unit tests — gate + result mapping (no network) |
+| `npm test` | Unit tests — gate, result mapping, smoke builder (no network) |
 
 ## License
 

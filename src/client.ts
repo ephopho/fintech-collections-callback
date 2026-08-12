@@ -13,6 +13,7 @@ import process from "node:process";
 import type { CallOutcome, OverdueAccount } from "./types.js";
 import { DEFAULT_GATE, checkAccount, type GateConfig } from "./gate.js";
 import { SAMPLE_ACCOUNTS } from "./fixtures.js";
+import { buildSmokeAccount } from "./smoke.js";
 
 const COST_PER_CALL_USD = 0.05;
 const DEFAULT_MAX_CALLS = 10;
@@ -20,14 +21,16 @@ const DEFAULT_MAX_CALLS = 10;
 interface CliArgs {
   live: boolean;
   maxCalls: number;
+  smoke: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
   const live = argv.includes("--live");
+  const smoke = argv.includes("--smoke");
   const capArg = argv.find((a) => a.startsWith("--max-calls="));
   const parsed = capArg ? Number(capArg.slice("--max-calls=".length)) : DEFAULT_MAX_CALLS;
   const maxCalls = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_MAX_CALLS;
-  return { live, maxCalls };
+  return { live, maxCalls, smoke };
 }
 
 interface RunOptions {
@@ -121,6 +124,7 @@ async function writeReport(opts: CliArgs, outcomes: CallOutcome[]): Promise<stri
   const file = join(dir, `${new Date().toISOString().replace(/[:.]/g, "-")}.json`);
   const report = {
     mode: opts.live ? "live" : "dry-run",
+    smoke: opts.smoke,
     maxCalls: opts.maxCalls,
     costPerCallUsd: COST_PER_CALL_USD,
     placedCount,
@@ -133,19 +137,29 @@ async function writeReport(opts: CliArgs, outcomes: CallOutcome[]): Promise<stri
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  console.log(`CALL-E fintech collections callback — mode=${args.live ? "LIVE" : "DRY-RUN"} cap=${args.maxCalls} calls`);
+
+  // Smoke mode targets exactly one recipient built from SMOKE_* env vars, so a
+  // real --live call can hit a number you control instead of the fixtures.
+  const accounts = args.smoke ? [buildSmokeAccount()] : SAMPLE_ACCOUNTS;
+  const maxCalls = args.smoke ? 1 : args.maxCalls;
+  const effectiveArgs: CliArgs = { ...args, maxCalls };
+
+  const banner = args.smoke ? " SMOKE(1 recipient from SMOKE_* env)" : "";
+  console.log(`CALL-E fintech collections callback — mode=${args.live ? "LIVE" : "DRY-RUN"}${banner} cap=${maxCalls} calls`);
   if (!args.live) {
     console.log("No calls will be placed. Re-run with --live and CALLE_API_KEY set to dial.\n");
+  } else if (args.smoke) {
+    console.log("SMOKE live run: places ONE real call to SMOKE_PHONE if it passes the gate.\n");
   }
 
-  const outcomes = await run({ live: args.live, maxCalls: args.maxCalls, accounts: SAMPLE_ACCOUNTS, gate: DEFAULT_GATE });
+  const outcomes = await run({ live: args.live, maxCalls, accounts, gate: DEFAULT_GATE });
 
   const placedCount = outcomes.filter((o) => o.placed).length;
   const skipped = outcomes.length - placedCount;
   const estCost = (placedCount * COST_PER_CALL_USD).toFixed(2);
   console.log(`\nSummary: ${placedCount} placed, ${skipped} skipped. Est. cost: $${estCost}`);
 
-  const file = await writeReport(args, outcomes);
+  const file = await writeReport(effectiveArgs, outcomes);
   console.log(`Results written to ${file}`);
 }
 
