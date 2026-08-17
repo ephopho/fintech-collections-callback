@@ -41,14 +41,21 @@ npm install
 
 ## Credentials
 
-Only **live** runs need credentials. Copy `.env.example` to `.env` (or export
-the variables) and set:
+Only **live** runs need credentials. Provide them either way:
+
+- **A `.env` file** — copy `.env.example` to `.env` and fill it in. If a `.env`
+  exists in this directory it is loaded automatically at startup (via Node's
+  built-in `process.loadEnvFile`; requires Node ≥ 20.12). `.env` is git-ignored.
+- **Or shell variables** — export them yourself, e.g. PowerShell
+  `$env:CALLE_API_KEY = "…"` or bash `export CALLE_API_KEY=…`.
+
+Variables:
 
 - `CALLE_API_KEY` — your key from the CALL-E dashboard. **Required for `--live`.**
 - `CALLE_BASE_URL` — optional; defaults to `https://api.heycall-e.com`.
 
-The key is read from the environment only, never written to disk or logs. A
-dry-run needs no key.
+The key is read from the environment only and never written to logs. A dry-run
+needs no key, so no `.env` is required for it.
 
 ## Dry-run / preview behavior (default)
 
@@ -96,6 +103,11 @@ When the preview shows `would call …`, place the real call:
 # CALLE_API_KEY must be set; consent is OFF unless you set SMOKE_CONSENT=true
 SMOKE_PHONE=+1XXXXXXXXXX SMOKE_CONSENT=true npm run dev -- --live --smoke
 ```
+
+> The inline `VAR=value command` form above is bash-only. On Windows/PowerShell,
+> set each first (`$env:SMOKE_PHONE = "+1XXXXXXXXXX"`), **or** — simplest — put
+> `CALLE_API_KEY` and the `SMOKE_*` values in `.env` (auto-loaded) and just run
+> `npm run dev -- --live --smoke`.
 
 Recognized variables (only `SMOKE_PHONE` is required):
 

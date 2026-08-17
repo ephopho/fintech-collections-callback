@@ -15,6 +15,18 @@ import { DEFAULT_GATE, checkAccount, type GateConfig } from "./gate.js";
 import { SAMPLE_ACCOUNTS } from "./fixtures.js";
 import { buildSmokeAccount } from "./smoke.js";
 
+// Load a local .env (from the current directory) if present, so CALLE_API_KEY
+// and friends can live there for --live runs instead of being exported by hand.
+// No-op when the file is absent or the runtime predates process.loadEnvFile
+// (Node < 20.12) — variables set in the shell still work either way.
+if (typeof process.loadEnvFile === "function") {
+  try {
+    process.loadEnvFile();
+  } catch {
+    // No .env in the current directory; dry-run needs none, so carry on.
+  }
+}
+
 const COST_PER_CALL_USD = 0.05;
 const DEFAULT_MAX_CALLS = 10;
 
