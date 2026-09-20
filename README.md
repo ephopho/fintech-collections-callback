@@ -21,15 +21,31 @@ places those calls under a spend cap, and writes an auditable report.
    - valid **IANA timezone**, used to enforce **quiet hours** (no calls before
      08:00 or at/after 21:00 local time);
    - a per-run **spend cap** on the number of calls.
-3. For each allowed account, calls CALL-E with a task whose compliance rules are
-   fixed in code (identify as automated, right-party only, no threats, never
-   collect payment on the call), and a `recipientResultSchema` so the result
-   comes back structured.
-4. Writes a JSON report of every decision and outcome.
+3. For each allowed account, calls CALL-E with a task that **verifies the right
+   party before disclosing any debt detail**, keeps compliance rules fixed in
+   code (identify as automated, no threats, never collect payment on the call),
+   and passes a `recipientResultSchema` so the result comes back structured.
+4. Writes a JSON report of every decision and outcome, with **phone numbers masked**.
 
 CALL-E is imported and invoked at runtime in
 [`src/calle.ts`](src/calle.ts); orchestration and the gate live in
-[`src/client.ts`](src/client.ts) and [`src/gate.ts`](src/gate.ts).
+[`src/client.ts`](src/client.ts) and [`src/gate.ts`](src/gate.ts); the safety
+boundary helpers live in [`src/safety.ts`](src/safety.ts).
+
+## Safety boundaries (enforced in code)
+
+- **Live never dials the checked-in fixtures.** `--live` fails closed unless an
+  operator supplies the recipient at run time via `--smoke` (`SMOKE_*` env);
+  fixtures are dry-run preview only.
+- **Credentials stay on-net.** `CALLE_BASE_URL` is allowlisted to official
+  `https://*.heycall-e.com` (or a loopback host) before the bearer key is
+  attached — it is never sent to an arbitrary origin.
+- **Right-party first.** No amount or due date is spoken until the named party
+  confirms their identity; a wrong party ends the call with nothing disclosed.
+- **Outputs are masked.** Destinations are masked in both logs and reports.
+- **Ambiguous calls halt the batch.** If a create/wait error leaves it unknown
+  whether a call was placed, the run stops and records the outcome as
+  `unresolved` for reconciliation, rather than risking another side effect.
 
 ## Setup
 
@@ -53,6 +69,8 @@ Variables:
 
 - `CALLE_API_KEY` — your key from the CALL-E dashboard. **Required for `--live`.**
 - `CALLE_BASE_URL` — optional; defaults to `https://api.heycall-e.com`.
+  **Allowlisted**: only official `https://*.heycall-e.com` origins (or a loopback
+  host for local testing) are accepted — the app refuses to send the key anywhere else.
 
 The key is read from the environment only and never written to logs. A dry-run
 needs no key, so no `.env` is required for it.
@@ -73,21 +91,17 @@ npm run dev -- --max-calls=3
 
 ## Going live
 
-```bash
-# with CALLE_API_KEY set in your environment or .env
-npm run live
-npm run dev -- --live --max-calls=5
-```
+Live mode **fails closed on the sample fixtures** — it will not dial them.
+`npm run dev -- --live` on its own exits with an error. A real call only goes to
+a recipient you supply at run time via `--smoke` (`SMOKE_*` env), so it always
+targets an operator-authorized number.
 
-Each eligible account triggers one real outbound call via
-`client.calls.createAndWait(...)`, guarded by a deterministic idempotency key
-(`collections_<accountId>_<dueDate>`) so a re-run never double-dials.
+Each call goes out via `client.calls.createAndWait(...)`, guarded by a
+deterministic idempotency key (`collections_<accountId>_<dueDate>`) so a re-run
+never double-dials. If a create/wait error leaves the outcome ambiguous, the run
+**halts** and marks it `unresolved` instead of continuing.
 
-> **Never `--live` against the sample fixtures.** Their numbers are
-> reserved-for-fiction (e.g. `+12025550143` passes the gate) and must not be
-> dialed. Use the smoke test below to place a real call to a number you control.
-
-### Live smoke test (one number you control)
+### Live smoke test (one number you control) — the only live path
 
 `--smoke` ignores the fixtures and builds a **single** recipient from `SMOKE_*`
 environment variables, then hard-caps the run at one call. It runs the same
@@ -130,6 +144,9 @@ Recognized variables (only `SMOKE_PHONE` is required):
   billable call) and are subject to telecom regulations in the recipient's
   jurisdiction. You are responsible for having a lawful basis and consent to
   call each recipient.
+- The call script **verifies the right party before disclosing** the amount or
+  due date; a wrong party ends the call with nothing revealed.
+- Phone numbers are **masked** in console output and in the JSON report.
 - Dry-run mode has no external side effects.
 - The only local side effect is a report written under `runs/` (see below).
 
@@ -142,6 +159,9 @@ Recognized variables (only `SMOKE_PHONE` is required):
   billing cycle — the effective rollback for "I ran it twice."
 - A call already answered cannot be un-placed; the report records it so
   operators can reconcile.
+- If a call's creation is **ambiguous** (it may have been accepted before the
+  error), the run **halts** and records the outcome as `unresolved` — no further
+  call is placed until an operator reconciles it.
 
 ## Where results are stored
 
@@ -157,11 +177,13 @@ fintech-collections-callback/
 │   ├── client.ts     # entry point: batch loop, spend cap, cancellation, report
 │   ├── gate.ts       # consent + E.164 + IANA timezone + quiet-hours checks
 │   ├── calle.ts      # the only CALL-E SDK integration (task + structured result)
+│   ├── safety.ts     # base-URL allowlist, output masking, fail-closed live guard
 │   ├── fixtures.ts   # sample accounts (fictional numbers; some intentionally blocked)
 │   ├── smoke.ts      # SMOKE_* env -> single recipient for a one-number live test
 │   ├── types.ts      # domain types
 │   ├── gate.test.ts  # gate unit tests (no network)
-│   ├── calle.test.ts # result-mapping unit tests (no network)
+│   ├── calle.test.ts # result-mapping + right-party task tests (no network)
+│   ├── safety.test.ts# allowlist / masking / fail-closed tests (no network)
 │   └── smoke.test.ts # SMOKE_* account-builder unit tests (no network)
 ├── .env.example
 ├── package.json
@@ -173,13 +195,13 @@ fintech-collections-callback/
 | Script | Purpose |
 | --- | --- |
 | `npm run dry-run` | Full gate, no calls (default) |
-| `npm run live` | Place real calls (needs `CALLE_API_KEY`) |
+| `npm run live` | Live call to the operator-supplied `SMOKE_*` recipient (needs `CALLE_API_KEY`) |
 | `npm run dev -- <args>` | Run directly with custom flags (`--live`, `--smoke`, `--max-calls=N`) |
 | `npm run dev -- --smoke` | One-number test from `SMOKE_*` env (add `--live` to dial) |
 | `npm run build` | Compile to `dist/` |
 | `npm start` | Run the compiled build |
 | `npm run typecheck` | `tsc --noEmit` |
-| `npm test` | Unit tests — gate, result mapping, smoke builder (no network) |
+| `npm test` | Unit tests — gate, mapping, right-party task, safety boundary, smoke (no network) |
 
 ## License
 

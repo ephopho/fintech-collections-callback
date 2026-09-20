@@ -59,5 +59,7 @@ export interface CallOutcome {
   confidence?: number;
   structured?: CollectionsResult;
   error?: string;
+  /** True when a create/wait error left it unknown whether a call was placed. */
+  unresolved?: boolean;
   at: string;
 }

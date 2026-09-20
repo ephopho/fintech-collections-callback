@@ -4,7 +4,34 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { mapResult } from "./calle.js";
+import { mapResult, buildTask } from "./calle.js";
+import type { OverdueAccount } from "./types.js";
+
+const account: OverdueAccount = {
+  accountId: "T-1",
+  customerName: "Ada Lovelace",
+  phone: "+12025550143",
+  region: "US",
+  timezone: "America/New_York",
+  amountDueCents: 24999,
+  currency: "USD",
+  dueDate: "2026-07-15",
+  daysPastDue: 25,
+  consentToContact: true,
+  consentTimestamp: "2026-06-01T10:00:00Z",
+};
+
+test("buildTask verifies right-party BEFORE disclosing any debt amount/date", () => {
+  const task = buildTask(account);
+  const verifyAt = task.indexOf("RIGHT-PARTY VERIFICATION");
+  const amountAt = task.indexOf("$249.99");
+  assert.ok(verifyAt >= 0, "task must include a right-party verification step");
+  assert.ok(amountAt >= 0, "task must eventually state the amount");
+  assert.ok(verifyAt < amountAt, "verification must come before the amount is disclosed");
+  // The due date is a debt detail and must also follow verification.
+  assert.ok(task.indexOf(account.dueDate) > verifyAt, "due date must follow verification");
+  assert.match(task, /do NOT reveal any debt/i);
+});
 
 test("mapResult returns undefined for a missing result", () => {
   assert.equal(mapResult(undefined), undefined);

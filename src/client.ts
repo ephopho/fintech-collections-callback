@@ -2,9 +2,13 @@
 // mode) places one CALL-E call per allowed account under a spend cap. Dry-run is
 // the default and never touches the network.
 //
-//   npm run dry-run              # default: no calls placed
-//   npm run live                 # requires CALLE_API_KEY
-//   npm run dev -- --max-calls=3 # override the spend cap
+//   npm run dry-run                        # default: no calls placed
+//   npm run dev -- --live --smoke          # live requires operator-authorized
+//                                          # SMOKE_* input + CALLE_API_KEY
+//   npm run dev -- --max-calls=3           # override the dry-run spend cap
+//
+// Live mode fails closed on the checked-in fixtures: it will only dial a
+// recipient supplied at run time via --smoke (SMOKE_* env).
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -14,6 +18,7 @@ import type { CallOutcome, OverdueAccount } from "./types.js";
 import { DEFAULT_GATE, checkAccount, type GateConfig } from "./gate.js";
 import { SAMPLE_ACCOUNTS } from "./fixtures.js";
 import { buildSmokeAccount } from "./smoke.js";
+import { assertLiveInputAuthorized, maskPhone } from "./safety.js";
 
 // Load a local .env (from the current directory) if present, so CALLE_API_KEY
 // and friends can live there for --live runs instead of being exported by hand.
@@ -80,16 +85,17 @@ async function run(opts: RunOptions): Promise<CallOutcome[]> {
   for (const account of opts.accounts) {
     if (cancelled) break;
     const at = new Date().toISOString();
+    const masked = maskPhone(account.phone); // never log or store the full destination
 
     const decision = checkAccount(account, opts.gate);
     if (!decision.allowed) {
-      outcomes.push({ accountId: account.accountId, phone: account.phone, mode, placed: false, blockedReason: decision.reason, at });
-      console.log(`[skip] ${account.accountId} ${account.phone} — blocked: ${decision.reason}`);
+      outcomes.push({ accountId: account.accountId, phone: masked, mode, placed: false, blockedReason: decision.reason, at });
+      console.log(`[skip] ${account.accountId} ${masked} — blocked: ${decision.reason}`);
       continue;
     }
 
     if (placed >= opts.maxCalls) {
-      outcomes.push({ accountId: account.accountId, phone: account.phone, mode, placed: false, blockedReason: "spend-cap-reached", at });
+      outcomes.push({ accountId: account.accountId, phone: masked, mode, placed: false, blockedReason: "spend-cap-reached", at });
       console.log(`[skip] ${account.accountId} — spend cap reached (${opts.maxCalls} calls)`);
       continue;
     }
@@ -97,8 +103,8 @@ async function run(opts: RunOptions): Promise<CallOutcome[]> {
     if (!opts.live) {
       // Count against the cap so a dry-run mirrors live budgeting exactly.
       placed++;
-      outcomes.push({ accountId: account.accountId, phone: account.phone, mode, placed: false, at });
-      console.log(`[dry-run] would call ${account.phone} for ${account.customerName} (${account.daysPastDue}d past due)`);
+      outcomes.push({ accountId: account.accountId, phone: masked, mode, placed: false, at });
+      console.log(`[dry-run] would call ${masked} for ${account.customerName} (${account.daysPastDue}d past due)`);
       continue;
     }
 
@@ -107,7 +113,7 @@ async function run(opts: RunOptions): Promise<CallOutcome[]> {
       placed++;
       outcomes.push({
         accountId: account.accountId,
-        phone: account.phone,
+        phone: masked,
         mode,
         placed: true,
         callId: res.callId,
@@ -117,11 +123,15 @@ async function run(opts: RunOptions): Promise<CallOutcome[]> {
         structured: res.structured,
         at,
       });
-      console.log(`[live] ${account.accountId} ${account.phone} — ${res.status} — ${res.structured?.outcome ?? "no-result"}`);
+      console.log(`[live] ${account.accountId} ${masked} — ${res.status} — ${res.structured?.outcome ?? "no-result"}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      outcomes.push({ accountId: account.accountId, phone: account.phone, mode, placed: false, error: message, at });
-      console.error(`[error] ${account.accountId} ${account.phone} — ${message}`);
+      // Ambiguous: CALL-E may already have accepted the call. Do NOT place any
+      // further call — record an unresolved checkpoint and halt the batch so a
+      // second side effect can't happen before this one is reconciled.
+      outcomes.push({ accountId: account.accountId, phone: masked, mode, placed: false, unresolved: true, error: message, at });
+      console.error(`[halt] ${account.accountId} ${masked} — ambiguous create; batch stopped for reconciliation: ${message}`);
+      break;
     }
   }
 
@@ -150,8 +160,12 @@ async function writeReport(opts: CliArgs, outcomes: CallOutcome[]): Promise<stri
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
-  // Smoke mode targets exactly one recipient built from SMOKE_* env vars, so a
-  // real --live call can hit a number you control instead of the fixtures.
+  // Fail closed: live mode never dials the checked-in fixtures. It requires an
+  // operator-authorized recipient supplied at run time via --smoke (SMOKE_* env).
+  assertLiveInputAuthorized(args);
+
+  // Smoke mode targets exactly one operator-supplied recipient from SMOKE_* env
+  // vars. Fixtures are dry-run preview only and are never dialed.
   const accounts = args.smoke ? [buildSmokeAccount()] : SAMPLE_ACCOUNTS;
   const maxCalls = args.smoke ? 1 : args.maxCalls;
   const effectiveArgs: CliArgs = { ...args, maxCalls };
@@ -159,17 +173,19 @@ async function main(): Promise<void> {
   const banner = args.smoke ? " SMOKE(1 recipient from SMOKE_* env)" : "";
   console.log(`CALL-E fintech collections callback — mode=${args.live ? "LIVE" : "DRY-RUN"}${banner} cap=${maxCalls} calls`);
   if (!args.live) {
-    console.log("No calls will be placed. Re-run with --live and CALLE_API_KEY set to dial.\n");
-  } else if (args.smoke) {
-    console.log("SMOKE live run: places ONE real call to SMOKE_PHONE if it passes the gate.\n");
+    console.log("No calls will be placed. Re-run with --live --smoke (operator-authorized SMOKE_* recipient) and CALLE_API_KEY to dial.\n");
+  } else {
+    console.log("SMOKE live run: places ONE real call to the operator-supplied SMOKE_PHONE if it passes the gate.\n");
   }
 
   const outcomes = await run({ live: args.live, maxCalls, accounts, gate: DEFAULT_GATE });
 
   const placedCount = outcomes.filter((o) => o.placed).length;
-  const skipped = outcomes.length - placedCount;
+  const unresolved = outcomes.filter((o) => o.unresolved).length;
+  const skipped = outcomes.length - placedCount - unresolved;
   const estCost = (placedCount * COST_PER_CALL_USD).toFixed(2);
-  console.log(`\nSummary: ${placedCount} placed, ${skipped} skipped. Est. cost: $${estCost}`);
+  const halt = unresolved ? `, ${unresolved} UNRESOLVED (batch halted — reconcile)` : "";
+  console.log(`\nSummary: ${placedCount} placed, ${skipped} skipped${halt}. Est. cost: $${estCost}`);
 
   const file = await writeReport(effectiveArgs, outcomes);
   console.log(`Results written to ${file}`);

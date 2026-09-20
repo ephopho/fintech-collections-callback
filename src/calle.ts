@@ -4,6 +4,7 @@
 import { CalleClient } from "@call-e/calle";
 import type { Call } from "@call-e/calle";
 import type { OverdueAccount, CollectionsResult } from "./types.js";
+import { resolveBaseUrl } from "./safety.js";
 
 export type CalleClientLike = CalleClient;
 
@@ -37,7 +38,9 @@ const RECIPIENT_RESULT_SCHEMA = {
 const CALL_TIMEOUT_MS = 300_000;
 
 export function createCalleClient(apiKey: string, baseUrl?: string): CalleClient {
-  return new CalleClient({ apiKey, baseUrl: baseUrl ?? "https://api.heycall-e.com" });
+  // Fail closed: resolveBaseUrl throws unless the origin is an official CALL-E
+  // HTTPS host (or loopback), so the bearer key can't be sent to an arbitrary URL.
+  return new CalleClient({ apiKey, baseUrl: resolveBaseUrl(baseUrl) });
 }
 
 /** Deterministic idempotency key so a retried run never double-dials an account. */
@@ -45,21 +48,26 @@ export function idempotencyKey(account: OverdueAccount): string {
   return `collections_${account.accountId}_${account.dueDate}`.replace(/[^a-zA-Z0-9_]/g, "_");
 }
 
-/** The spoken instructions for CALL-E. Compliance rules are baked in, not optional. */
+/**
+ * The spoken instructions for CALL-E. Right-party verification comes FIRST: no
+ * debt, amount, or due date is disclosed until the named party confirms their
+ * identity. Compliance rules are baked in, not optional.
+ */
 export function buildTask(account: OverdueAccount): string {
   const amount = (account.amountDueCents / 100).toLocaleString("en-US", {
     style: "currency",
     currency: account.currency,
   });
   return [
-    `Call ${account.phone} and ask to speak with ${account.customerName}.`,
-    `Purpose: a courtesy reminder that a payment of ${amount} was due on ${account.dueDate} and is now ${account.daysPastDue} days past due.`,
-    "Rules you MUST follow:",
-    "- Identify yourself as an automated assistant calling on behalf of the lender.",
-    `- Only discuss the account with ${account.customerName}. If someone else answers or it is the wrong number, apologize and end the call.`,
+    `Call ${account.phone}. You are an automated assistant calling on behalf of the lender.`,
+    `Step 1 — RIGHT-PARTY VERIFICATION FIRST. Ask to speak with ${account.customerName} and confirm you are actually speaking with them.`,
+    "Until identity is confirmed, do NOT reveal any debt, amount, due date, account details, or even that this concerns a payment or collections matter.",
+    `If ${account.customerName} is unavailable, someone else answers, or identity cannot be confirmed: disclose nothing, apologize for the intrusion, and end the call.`,
+    `Step 2 — ONLY after ${account.customerName} confirms their identity, give a courtesy reminder: a payment of ${amount} was due on ${account.dueDate} and is now ${account.daysPastDue} days past due.`,
+    "Rules you MUST follow throughout:",
     "- Be respectful. Do not threaten, pressure, or imply legal consequences.",
     "- Do NOT collect card numbers, bank details, or any payment on this call.",
-    "- Offer the customer a choice: give a promise-to-pay date, raise a dispute, or schedule a callback.",
+    "- After the reminder, offer a choice: give a promise-to-pay date, raise a dispute, or schedule a callback.",
     "When the call ends, report the outcome and any promise-to-pay date or requested callback time.",
   ].join("\n");
 }

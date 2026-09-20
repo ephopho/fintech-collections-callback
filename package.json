@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "tsx src/client.ts",
     "dry-run": "tsx src/client.ts",
-    "live": "tsx src/client.ts --live",
+    "live": "tsx src/client.ts --live --smoke",
     "build": "tsc",
     "start": "node dist/client.js",
     "typecheck": "tsc --noEmit",
